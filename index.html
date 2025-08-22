@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Google Maps – Nearby</title>
+<style>
+  html, body { height:100%; margin:0; font-family: Arial, sans-serif; }
+  #container { display:flex; height:100%; }
+  #sidebar {
+    width:160px; padding:1px; box-shadow:2px 0 5px rgba(0,0,0,.1);
+    display:flex; flex-direction:column; align-items:center; gap:40px;
+  }
+  #map { flex:1; height:100%; position:relative; }
+  .btn {
+    width:72px; height:72px; border-radius:50%; border:none; cursor:pointer;
+    display:flex; align-items:center; justify-content:center;
+    font-size:30px; /* icon size */
+  }
+  input[type="number"] {
+    width: 80px; padding: 3px; margin-top:5px; text-align: center;
+  }
+  .info-card {
+    background:#fff;
+    padding:10px;
+    min-width:180px;
+    border-radius:8px;
+    box-shadow:0 2px 6px rgba(0,0,0,0.3);
+    font-size:14px;
+    pointer-events:none;
+  }
+  .info-card h4 { margin:0 0 5px 0; font-size:16px; }
+  .info-card p { margin:0; }
+</style>
+</head>
+<body>
+<div id="container">
+  <div id="sidebar"></div>
+  <div id="map"></div>
+</div>
+
+<script>
+let map, service, userLocation = { lat: 31.9454, lng: 35.9284 };
+let markers = [];
+let meMarker = null;
+let rangeInput;
+let activeOverlay = null;
+
+function initMap() {
+  map = new google.maps.Map(document.getElementById("map"), {
+    center: userLocation, zoom: 15, mapTypeControl: true
+  });
+
+  service = new google.maps.places.PlacesService(map);
+
+  meMarker = new google.maps.Marker({
+    position: userLocation, map, title: "Default Location",
+    icon: "http://maps.google.com/mapfiles/ms/icons/blue-dot.png"
+  });
+
+  const sb = document.getElementById("sidebar");
+
+  // Me button (icon)
+  sb.appendChild(createButton("📍", "#28a745", locateMe));
+
+  // Range input
+  const rangeLabel = document.createElement("label");
+  rangeLabel.textContent = "Range (m):";
+  sb.appendChild(rangeLabel);
+
+  rangeInput = document.createElement("input");
+  rangeInput.type = "number";
+  rangeInput.value = 2500;
+  rangeInput.min = 100;
+  rangeInput.max = 50000;
+  sb.appendChild(rangeInput);
+
+  // Category buttons with icons
+  const categories = [
+    {icon:"🍴", type:"restaurant", color:"#e74c3c"},
+    {icon:"🏨", type:"lodging", color:"#3498db"},
+    {icon:"⛽", type:"gas_station", color:"#f39c12"},
+    {icon:"🏥", type:"hospital", color:"#9b59b6"}
+  ];
+
+  categories.forEach(c=>{
+    sb.appendChild(createButton(c.icon, c.color, ()=>searchNearby(c.type,c.color)));
+  });
+}
+
+// Helper: create a button with icon
+function createButton(iconText, color, onClick){
+  const b = document.createElement("button");
+  b.className="btn";
+  b.style.background=color;
+  b.textContent = iconText;  // emoji icon
+  b.onclick = onClick;
+  return b;
+}
+
+function locateMe(){
+  if(!navigator.geolocation) return alert("Geolocation not supported.");
+  navigator.geolocation.getCurrentPosition(pos=>{
+    userLocation={lat:pos.coords.latitude,lng:pos.coords.longitude};
+    map.setCenter(userLocation);
+    if(meMarker) meMarker.setMap(null);
+    meMarker = new google.maps.Marker({
+      position:userLocation,map,
+      icon:"http://maps.google.com/mapfiles/ms/icons/green-dot.png",
+      title:"You are here"
+    });
+  },()=>alert("Geolocation failed or denied."));
+}
+
+function clearPlaceMarkers(){
+  markers.forEach(m=>{
+    if(m.overlay) m.overlay.setMap(null);
+    m.setMap(null);
+  });
+  markers=[];
+}
+
+function searchNearby(type,color){
+  if(!userLocation) return alert("Click 'Me' first to set your location.");
+  clearPlaceMarkers();
+
+  const radius = parseInt(rangeInput.value) || 2500;
+  const request = { location: userLocation, radius: radius, type: type };
+
+  service.nearbySearch(request,(results,status)=>{
+    if(status!==google.maps.places.PlacesServiceStatus.OK || !results?.length){
+      return alert("No results found for: "+type);
+    }
+
+    const bounds = new google.maps.LatLngBounds();
+    results.forEach(place=>{
+      const marker = new google.maps.Marker({
+        position: place.geometry.location,
+        map,
+        title: place.name,
+        icon: getMarkerColor(color)
+      });
+
+      marker.addListener("click", ()=>{
+        if(activeOverlay) activeOverlay.setMap(null);
+
+        const overlay = new google.maps.OverlayView();
+        overlay.onAdd=function(){
+          const div = document.createElement("div");
+          div.className="info-card";
+          div.innerHTML=`<h4>${place.name}</h4><p>${place.vicinity||"Address not available"}</p>`;
+          this.div=div;
+          this.getPanes().floatPane.appendChild(div);
+        };
+        overlay.draw=function(){
+          const projection=this.getProjection();
+          const pos=projection.fromLatLngToDivPixel(marker.getPosition());
+          this.div.style.left=(pos.x+10)+"px";
+          this.div.style.top=(pos.y-50)+"px";
+        };
+        overlay.onRemove=function(){
+          if(this.div && this.div.parentNode) this.div.parentNode.removeChild(this.div);
+        };
+        overlay.setMap(map);
+        activeOverlay=overlay;
+      });
+
+      markers.push(marker);
+      bounds.extend(place.geometry.location);
+    });
+
+    if(meMarker) bounds.extend(meMarker.getPosition());
+    map.fitBounds(bounds);
+  });
+}
+
+function getMarkerColor(color){
+  switch(color){
+    case "#e74c3c": return "http://maps.google.com/mapfiles/ms/icons/red-dot.png";
+    case "#3498db": return "http://maps.google.com/mapfiles/ms/icons/blue-dot.png";
+    case "#f39c12": return "http://maps.google.com/mapfiles/ms/icons/orange-dot.png";
+    case "#9b59b6": return "http://maps.google.com/mapfiles/ms/icons/purple-dot.png";
+    default: return "http://maps.google.com/mapfiles/ms/icons/green-dot.png";
+  }
+}
+</script>
+
+<script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAVheHJ70-ZswphI_ZobprNdiiVTo4a9FU&libraries=places&callback=initMap" async defer></script>
+</body>
+</html>
